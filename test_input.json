@@ -1,6 +1,10 @@
 {
   "input": {
-    "meeting_id": "test-meeting-001",
-    "audio_url": "uploads/20260825/short_6e793cd1-e7e7-4a04-8262-7667648dcc43.mp3"
+    "meeting_id": "replace-with-a-real-meeting-id",
+    "audio_url": "https://replace.r2.cloudflarestorage.com/replace-with-a-short-lived-signed-url",
+    "language": "en",
+    "diarize": true,
+    "min_speakers": 1,
+    "max_speakers": 8
   }
 }
