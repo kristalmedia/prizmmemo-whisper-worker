@@ -36,6 +36,25 @@ DOWNLOAD_TIMEOUT_SEC = _positive_int_env("DOWNLOAD_TIMEOUT_SEC", 600)
 ALLOWED_AUDIO_HOST_SUFFIX = os.getenv(
     "ALLOWED_AUDIO_HOST_SUFFIX", ".r2.cloudflarestorage.com"
 ).strip().lower()
+RUNPOD_MODEL_CACHE_ROOT = Path("/runpod-volume/huggingface-cache/hub")
+
+
+def _resolve_cached_snapshot(model_id: str) -> Path | None:
+    if "/" not in model_id:
+        return None
+    organization, name = model_id.split("/", 1)
+    model_root = RUNPOD_MODEL_CACHE_ROOT / f"models--{organization}--{name}"
+    snapshots_root = model_root / "snapshots"
+    ref = model_root / "refs" / "main"
+    if ref.is_file():
+        candidate = snapshots_root / ref.read_text(encoding="utf-8").strip()
+        if candidate.is_dir():
+            return candidate
+    if snapshots_root.is_dir():
+        snapshots = sorted(path for path in snapshots_root.iterdir() if path.is_dir())
+        if snapshots:
+            return snapshots[0]
+    return None
 
 
 def _progress(job: dict[str, Any], stage: str) -> None:
@@ -152,24 +171,40 @@ class WhisperXEngine:
             raise RuntimeError("CUDA GPU is required but torch.cuda.is_available() is false")
 
         self.device = "cuda"
-        self.model_name = os.getenv("WHISPER_MODEL", "large-v3").strip()
+        self.model_id = os.getenv(
+            "WHISPER_MODEL_ID", "Systran/faster-whisper-large-v3"
+        ).strip()
         self.compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "float16").strip()
         self.batch_size = _positive_int_env("WHISPER_BATCH_SIZE", 16)
-        self.cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface")
+        self.hf_cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface")
+        cached_model = _resolve_cached_snapshot(self.model_id)
+        model_source = str(cached_model) if cached_model is not None else self.model_id
+        download_root = None if cached_model is not None else os.getenv(
+            "ASR_DOWNLOAD_ROOT", "/root/.cache/prizmmemo-whisper"
+        )
         hf_token = os.getenv("HF_TOKEN", "").strip()
         if not hf_token:
             raise RuntimeError("HF_TOKEN is required for pyannote diarization")
 
-        print(f"[startup] loading WhisperX model={self.model_name} compute={self.compute_type}")
+        source = "Runpod cache" if cached_model is not None else "Hugging Face"
+        print(
+            f"[startup] loading WhisperX model={self.model_id} source={source} "
+            f"compute={self.compute_type}"
+        )
         self.asr_model = whisperx.load_model(
-            self.model_name,
+            model_source,
             self.device,
             compute_type=self.compute_type,
-            download_root=self.cache_dir,
+            download_root=download_root,
+            local_files_only=cached_model is not None,
             vad_method="silero",
         )
         print("[startup] loading pyannote speaker-diarization-community-1")
-        self.diarizer = DiarizationPipeline(token=hf_token, device=self.device, cache_dir=self.cache_dir)
+        self.diarizer = DiarizationPipeline(
+            token=hf_token,
+            device=self.device,
+            cache_dir=self.hf_cache_dir,
+        )
         print(f"[startup] ready engine={ENGINE_VERSION} gpu={torch.cuda.get_device_name(0)}")
 
     def transcribe(self, job: dict[str, Any], request: dict[str, Any], audio_path: Path) -> dict[str, Any]:
@@ -189,7 +224,7 @@ class WhisperXEngine:
             align_model, metadata = whisperx.load_align_model(
                 language_code=language,
                 device=self.device,
-                model_dir=self.cache_dir,
+                model_dir=self.hf_cache_dir,
             )
             try:
                 result = whisperx.align(

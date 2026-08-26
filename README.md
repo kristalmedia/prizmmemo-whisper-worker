@@ -23,15 +23,15 @@ The completed output contains:
 
 | Name | Default | Purpose |
 | --- | --- | --- |
-| WHISPER_MODEL | large-v3 | Faster-Whisper model identifier |
+| WHISPER_MODEL_ID | Systran/faster-whisper-large-v3 | Faster-Whisper Hugging Face repository |
 | WHISPER_COMPUTE_TYPE | float16 | CTranslate2 compute type |
 | WHISPER_BATCH_SIZE | 16 | ASR batch size; lower this if GPU memory is exhausted |
 | MAX_AUDIO_BYTES | 536870912 | Maximum downloaded input size |
 | DOWNLOAD_TIMEOUT_SEC | 600 | Per-read timeout while downloading from R2 |
 | ALLOWED_AUDIO_HOST_SUFFIX | .r2.cloudflarestorage.com | Required signed-URL hostname suffix |
-| HF_HOME | /root/.cache/huggingface | Hugging Face and model cache root; override only when attaching persistent cache storage |
+| HF_HOME | /root/.cache/huggingface | Runtime Hugging Face cache for pyannote and alignment models |
 
-For the initial endpoint use a 24 GB GPU, Queue mode, concurrency 1, max workers 1, and active workers 0. The first cold start downloads the model artifacts unless Runpod's model cache or a network volume already contains them.
+For the initial endpoint use a 24 GB GPU, Queue mode, concurrency 1, max workers 1, and active workers 0. Set the Runpod Model field to Systran/faster-whisper-large-v3. The worker resolves that cached snapshot automatically and downloads the gated pyannote model at runtime with HF_TOKEN.
 
 ## Deployment gate
 
