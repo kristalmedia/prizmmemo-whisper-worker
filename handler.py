@@ -16,7 +16,7 @@ import whisperx
 from whisperx.diarize import DiarizationPipeline
 
 
-ENGINE_VERSION = f"prizmmemo-runpod/1.0.0 whisperx/{importlib.metadata.version('whisperx')}"
+ENGINE_VERSION = f"prizmmemo-runpod/1.1.0 whisperx/{importlib.metadata.version('whisperx')}"
 LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z]{2,4})?$")
 
 
@@ -75,15 +75,17 @@ def _validate_audio_url(value: Any) -> str:
     return value
 
 
-def _optional_language(value: Any) -> str | None:
-    if value is None or value == "":
-        return None
-    if not isinstance(value, str):
-        raise ValueError("input.language must be a language code")
-    language = value.strip().lower()
-    if not LANGUAGE_RE.fullmatch(language):
-        raise ValueError("input.language must be a language code")
-    return language
+def _expected_languages(value: Any) -> list[str]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 3:
+        raise ValueError("input.languages must contain 1-3 language codes")
+    languages: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not LANGUAGE_RE.fullmatch(item.strip().lower()):
+            raise ValueError("input.languages must contain only language codes")
+        languages.append(item.strip().lower())
+    if len(set(languages)) != len(languages):
+        raise ValueError("input.languages must not contain duplicates")
+    return languages
 
 
 def _optional_speaker_count(name: str, value: Any) -> int | None:
@@ -115,7 +117,7 @@ def _validate_input(job: dict[str, Any]) -> dict[str, Any]:
     return {
         "meeting_id": meeting_id.strip(),
         "audio_url": _validate_audio_url(payload.get("audio_url")),
-        "language": _optional_language(payload.get("language")),
+        "languages": _expected_languages(payload.get("languages")),
         "diarize": diarize,
         "min_speakers": min_speakers,
         "max_speakers": max_speakers,
@@ -209,18 +211,22 @@ class WhisperXEngine:
 
     def transcribe(self, job: dict[str, Any], request: dict[str, Any], audio_path: Path) -> dict[str, Any]:
         audio = whisperx.load_audio(str(audio_path))
+        languages = request["languages"]
+        forced_language = languages[0] if len(languages) == 1 else None
 
         _progress(job, "transcribing")
         result = self.asr_model.transcribe(
             audio,
             batch_size=self.batch_size,
-            language=request["language"],
+            language=forced_language,
         )
         language = result["language"]
 
         alignment_applied = False
         _progress(job, "aligning")
         try:
+            if len(languages) > 1:
+                raise ValueError("mixed-language mode uses segment-level timestamps")
             align_model, metadata = whisperx.load_align_model(
                 language_code=language,
                 device=self.device,

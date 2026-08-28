@@ -2,7 +2,7 @@
   "input": {
     "meeting_id": "replace-with-a-real-meeting-id",
     "audio_url": "https://replace.r2.cloudflarestorage.com/replace-with-a-short-lived-signed-url",
-    "language": "en",
+    "languages": ["en", "ms"],
     "diarize": true,
     "min_speakers": 1,
     "max_speakers": 8
