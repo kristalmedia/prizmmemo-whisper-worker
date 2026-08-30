@@ -5,20 +5,24 @@ import importlib.metadata
 import os
 import re
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+import numpy as np
 import runpod
 import torch
 import whisperx
 from faster_whisper import BatchedInferencePipeline
 from whisperx.diarize import DiarizationPipeline
 
+from language_selection import select_language_candidate
+
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.2.1 "
+    f"prizmmemo-runpod/1.3.0 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
@@ -175,6 +179,143 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+class ExpectedLanguageBatchedInferencePipeline(BatchedInferencePipeline):
+    def __init__(self, model: Any, expected_languages: list[str]) -> None:
+        super().__init__(model)
+        self.expected_languages = tuple(expected_languages)
+        self.language_chunks: list[dict[str, Any]] = []
+        self._batch_choices: list[dict[str, Any]] = []
+
+    def forward(
+        self,
+        features: np.ndarray,
+        tokenizer: Any,
+        chunks_metadata: list[dict[str, Any]],
+        options: Any,
+    ) -> list[list[dict[str, Any]]]:
+        outputs = super().forward(features, tokenizer, chunks_metadata, options)
+        if len(self._batch_choices) != len(chunks_metadata):
+            raise RuntimeError("language candidate choices do not match speech chunks")
+        for metadata, choice in zip(chunks_metadata, self._batch_choices):
+            self.language_chunks.append(
+                {
+                    "speech_offset_sec": float(metadata["offset"]),
+                    "duration_sec": float(metadata["duration"]),
+                    **choice,
+                }
+            )
+        return outputs
+
+    def generate_segment_batched(
+        self,
+        features: np.ndarray,
+        tokenizer: Any,
+        options: Any,
+    ) -> tuple[Any, list[dict[str, Any]]]:
+        if options.word_timestamps:
+            raise RuntimeError("candidate decoding requires segment-level timestamps")
+        prompt = self.model.get_prompt(
+            tokenizer,
+            previous_tokens=(
+                tokenizer.encode(options.initial_prompt)
+                if options.initial_prompt is not None
+                else []
+            ),
+            without_timestamps=options.without_timestamps,
+            hotwords=options.hotwords,
+        )
+        if options.max_new_tokens is not None:
+            max_length = len(prompt) + options.max_new_tokens
+        else:
+            max_length = self.model.max_length
+        if max_length > self.model.max_length:
+            raise ValueError(
+                f"prompt plus max_new_tokens exceeds model max_length={self.model.max_length}"
+            )
+
+        language_token_index = prompt.index(tokenizer.language)
+        language_token_ids: list[int] = []
+        for language in self.expected_languages:
+            token_id = tokenizer.tokenizer.token_to_id(f"<|{language}|>")
+            if token_id is None:
+                raise ValueError(f"unsupported expected language: {language}")
+            language_token_ids.append(token_id)
+
+        candidate_count = len(self.expected_languages)
+        expanded_features = np.repeat(features, candidate_count, axis=0)
+        encoder_output = self.model.encode(expanded_features)
+        prompts: list[list[int]] = []
+        for _ in range(features.shape[0]):
+            for language_token_id in language_token_ids:
+                candidate_prompt = prompt.copy()
+                candidate_prompt[language_token_index] = language_token_id
+                prompts.append(candidate_prompt)
+
+        results = self.model.model.generate(
+            encoder_output,
+            prompts,
+            beam_size=options.beam_size,
+            patience=options.patience,
+            length_penalty=options.length_penalty,
+            max_length=max_length,
+            suppress_blank=options.suppress_blank,
+            suppress_tokens=options.suppress_tokens,
+            return_scores=True,
+            return_no_speech_prob=True,
+            sampling_temperature=options.temperatures[0],
+            repetition_penalty=options.repetition_penalty,
+            no_repeat_ngram_size=options.no_repeat_ngram_size,
+        )
+        detections = self.model.model.detect_language(encoder_output)
+
+        candidates: list[dict[str, Any]] = []
+        for generation in results:
+            sequence_length = len(generation.sequences_ids[0])
+            cumulative_log_probability = generation.scores[0] * (
+                sequence_length**options.length_penalty
+            )
+            candidates.append(
+                {
+                    "avg_logprob": cumulative_log_probability / (sequence_length + 1),
+                    "no_speech_prob": generation.no_speech_prob,
+                    "tokens": generation.sequences_ids[0],
+                }
+            )
+
+        selected_outputs: list[dict[str, Any]] = []
+        self._batch_choices = []
+        for chunk_index in range(features.shape[0]):
+            start = chunk_index * candidate_count
+            end = start + candidate_count
+            chunk_candidates = candidates[start:end]
+            detection_probabilities = {
+                token[2:-2]: float(probability)
+                for token, probability in detections[start]
+            }
+            expected_probabilities = [
+                detection_probabilities.get(language, 1e-8)
+                for language in self.expected_languages
+            ]
+            average_log_probabilities = [
+                float(candidate["avg_logprob"]) for candidate in chunk_candidates
+            ]
+            selected_index = select_language_candidate(
+                self.expected_languages,
+                average_log_probabilities,
+                expected_probabilities,
+            )
+            selected_outputs.append(chunk_candidates[selected_index])
+            self._batch_choices.append(
+                {
+                    "language": self.expected_languages[selected_index],
+                    "asr_avg_logprob": average_log_probabilities[selected_index],
+                    "detection_probability": expected_probabilities[selected_index],
+                }
+            )
+
+        return encoder_output, selected_outputs
+
+
 class WhisperXEngine:
     def __init__(self) -> None:
         if not torch.cuda.is_available():
@@ -211,7 +352,6 @@ class WhisperXEngine:
             local_files_only=cached_model is not None,
             vad_method="silero",
         )
-        self.multilingual_asr = BatchedInferencePipeline(model=self.asr_model.model)
         print("[startup] loading pyannote speaker-diarization-community-1")
         self.diarizer = DiarizationPipeline(
             token=hf_token,
@@ -230,28 +370,42 @@ class WhisperXEngine:
                 batch_size=self.batch_size,
                 language=languages[0],
             )
+            language_chunks: list[dict[str, Any]] = []
         else:
-            raw_segments, info = self.multilingual_asr.transcribe(
+            pipeline = ExpectedLanguageBatchedInferencePipeline(
+                self.asr_model.model,
+                languages,
+            )
+            raw_segments, _ = pipeline.transcribe(
                 audio,
-                language=None,
+                language=languages[0],
                 task="transcribe",
-                multilingual=True,
-                batch_size=self.batch_size,
+                multilingual=False,
+                batch_size=max(1, self.batch_size // len(languages)),
                 chunk_length=self.multilingual_chunk_length_sec,
                 vad_filter=True,
                 word_timestamps=False,
                 condition_on_previous_text=False,
             )
+            segments = [
+                {
+                    "start": float(segment.start),
+                    "end": float(segment.end),
+                    "text": segment.text,
+                }
+                for segment in raw_segments
+            ]
+            language_chunks = pipeline.language_chunks
+            language_durations: Counter[str] = Counter()
+            for chunk in language_chunks:
+                language_durations[chunk["language"]] += chunk["duration_sec"]
+            dominant_language = max(
+                languages,
+                key=lambda expected: language_durations[expected],
+            )
             result = {
-                "segments": [
-                    {
-                        "start": float(segment.start),
-                        "end": float(segment.end),
-                        "text": segment.text,
-                    }
-                    for segment in raw_segments
-                ],
-                "language": info.language,
+                "segments": segments,
+                "language": dominant_language,
             }
         language = result["language"]
 
@@ -306,11 +460,12 @@ class WhisperXEngine:
                 "language_mode": (
                     "forced_single_language"
                     if len(languages) == 1
-                    else "multilingual_short_vad_chunks"
+                    else "expected_language_candidate_decoding"
                 ),
                 "multilingual_chunk_length_sec": (
                     None if len(languages) == 1 else self.multilingual_chunk_length_sec
                 ),
+                "language_chunks": language_chunks,
                 "alignment_applied": alignment_applied,
                 "speaker_embeddings": speaker_embeddings,
                 "engine_version": ENGINE_VERSION,

@@ -20,6 +20,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY handler.py .
+COPY handler.py language_selection.py ./
 
 CMD ["python", "-u", "handler.py"]
