@@ -2,10 +2,11 @@
 
 Queue-based Runpod Serverless worker for GPU transcription, word alignment, and speaker diarization.
 
-`input.languages` contains one to three expected language codes. A single code is forced for the
-fast, stable single-language path. Two or more codes enable WhisperX multilingual decoding, which
-detects language independently for each speech segment; mixed-language mode intentionally skips
-single-language wav2vec alignment and retains segment-level timestamps for diarization.
+`input.languages` contains one to three expected language codes. A single code is forced through
+WhisperX's fast, stable single-language path. With two or more codes, the worker uses
+faster-whisper's multilingual batched pipeline, which detects the language independently for each
+VAD speech chunk and changes that chunk's decoder prompt accordingly. This mode intentionally
+skips single-language wav2vec alignment and retains segment-level timestamps for diarization.
 
 ## Job contract
 

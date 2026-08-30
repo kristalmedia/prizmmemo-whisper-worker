@@ -13,10 +13,11 @@ import httpx
 import runpod
 import torch
 import whisperx
+from faster_whisper import BatchedInferencePipeline
 from whisperx.diarize import DiarizationPipeline
 
 
-ENGINE_VERSION = f"prizmmemo-runpod/1.1.0 whisperx/{importlib.metadata.version('whisperx')}"
+ENGINE_VERSION = f"prizmmemo-runpod/1.2.0 whisperx/{importlib.metadata.version('whisperx')}"
 LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z]{2,4})?$")
 
 
@@ -201,6 +202,7 @@ class WhisperXEngine:
             local_files_only=cached_model is not None,
             vad_method="silero",
         )
+        self.multilingual_asr = BatchedInferencePipeline(model=self.asr_model.model)
         print("[startup] loading pyannote speaker-diarization-community-1")
         self.diarizer = DiarizationPipeline(
             token=hf_token,
@@ -212,21 +214,42 @@ class WhisperXEngine:
     def transcribe(self, job: dict[str, Any], request: dict[str, Any], audio_path: Path) -> dict[str, Any]:
         audio = whisperx.load_audio(str(audio_path))
         languages = request["languages"]
-        forced_language = languages[0] if len(languages) == 1 else None
-
         _progress(job, "transcribing")
-        result = self.asr_model.transcribe(
-            audio,
-            batch_size=self.batch_size,
-            language=forced_language,
-        )
+        if len(languages) == 1:
+            result = self.asr_model.transcribe(
+                audio,
+                batch_size=self.batch_size,
+                language=languages[0],
+            )
+        else:
+            raw_segments, info = self.multilingual_asr.transcribe(
+                audio,
+                language=None,
+                task="transcribe",
+                multilingual=True,
+                batch_size=self.batch_size,
+                vad_filter=True,
+                word_timestamps=False,
+                condition_on_previous_text=False,
+            )
+            result = {
+                "segments": [
+                    {
+                        "start": float(segment.start),
+                        "end": float(segment.end),
+                        "text": segment.text,
+                    }
+                    for segment in raw_segments
+                ],
+                "language": info.language,
+            }
         language = result["language"]
 
         alignment_applied = False
         _progress(job, "aligning")
         try:
             if len(languages) > 1:
-                raise ValueError("mixed-language mode uses segment-level timestamps")
+                raise ValueError("multiple expected languages use segment-level timestamps")
             align_model, metadata = whisperx.load_align_model(
                 language_code=language,
                 device=self.device,
