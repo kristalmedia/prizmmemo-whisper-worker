@@ -18,15 +18,16 @@ import whisperx
 from faster_whisper import BatchedInferencePipeline
 from whisperx.diarize import DiarizationPipeline
 
-from language_selection import select_language_candidate
+from language_selection import score_language_candidates, select_language_candidate
 
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.3.0 "
+    f"prizmmemo-runpod/1.3.1 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
 LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z]{2,4})?$")
+CONTIGUOUS_SPEECH_GAP_SEC = 0.15
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -185,6 +186,9 @@ class ExpectedLanguageBatchedInferencePipeline(BatchedInferencePipeline):
         self.expected_languages = tuple(expected_languages)
         self.language_chunks: list[dict[str, Any]] = []
         self._batch_choices: list[dict[str, Any]] = []
+        self._current_chunks_metadata: list[dict[str, Any]] = []
+        self._previous_language: str | None = None
+        self._previous_speech_end_sec: float | None = None
 
     def forward(
         self,
@@ -193,7 +197,11 @@ class ExpectedLanguageBatchedInferencePipeline(BatchedInferencePipeline):
         chunks_metadata: list[dict[str, Any]],
         options: Any,
     ) -> list[list[dict[str, Any]]]:
-        outputs = super().forward(features, tokenizer, chunks_metadata, options)
+        self._current_chunks_metadata = chunks_metadata
+        try:
+            outputs = super().forward(features, tokenizer, chunks_metadata, options)
+        finally:
+            self._current_chunks_metadata = []
         if len(self._batch_choices) != len(chunks_metadata):
             raise RuntimeError("language candidate choices do not match speech chunks")
         for metadata, choice in zip(chunks_metadata, self._batch_choices):
@@ -299,19 +307,78 @@ class ExpectedLanguageBatchedInferencePipeline(BatchedInferencePipeline):
             average_log_probabilities = [
                 float(candidate["avg_logprob"]) for candidate in chunk_candidates
             ]
+            metadata = self._current_chunks_metadata[chunk_index]
+            speech_offset_sec = float(metadata["offset"])
+            speech_end_sec = speech_offset_sec + float(metadata["duration"])
+            gap_from_previous_sec = (
+                None
+                if self._previous_speech_end_sec is None
+                else speech_offset_sec - self._previous_speech_end_sec
+            )
+            continuous_with_previous = (
+                gap_from_previous_sec is not None
+                and -0.05 <= gap_from_previous_sec <= CONTIGUOUS_SPEECH_GAP_SEC
+            )
+            candidate_scores = score_language_candidates(
+                self.expected_languages,
+                average_log_probabilities,
+                expected_probabilities,
+                primary_language=self.expected_languages[0],
+                previous_language=self._previous_language,
+                continuous_with_previous=continuous_with_previous,
+            )
             selected_index = select_language_candidate(
                 self.expected_languages,
                 average_log_probabilities,
                 expected_probabilities,
+                primary_language=self.expected_languages[0],
+                previous_language=self._previous_language,
+                continuous_with_previous=continuous_with_previous,
             )
             selected_outputs.append(chunk_candidates[selected_index])
+            raw_selected_index = max(
+                range(candidate_count),
+                key=lambda index: (candidate_scores[index]["base_score"], -index),
+            )
+            candidate_diagnostics = [
+                {
+                    "language": language,
+                    "asr_avg_logprob": average_log_probabilities[index],
+                    "detection_probability": expected_probabilities[index],
+                    **candidate_scores[index],
+                }
+                for index, language in enumerate(self.expected_languages)
+            ]
             self._batch_choices.append(
                 {
                     "language": self.expected_languages[selected_index],
                     "asr_avg_logprob": average_log_probabilities[selected_index],
                     "detection_probability": expected_probabilities[selected_index],
+                    "selection_reason": (
+                        "adjusted_ambiguous_choice"
+                        if selected_index != raw_selected_index
+                        else "best_base_score"
+                    ),
+                    "continuous_with_previous": continuous_with_previous,
+                    "gap_from_previous_sec": gap_from_previous_sec,
+                    "candidates": candidate_diagnostics,
                 }
             )
+            print(
+                f"[language-choice] offset={speech_offset_sec:.2f}s "
+                f"duration={float(metadata['duration']):.2f}s "
+                f"selected={self.expected_languages[selected_index]} "
+                f"reason={self._batch_choices[-1]['selection_reason']} "
+                f"continuous={continuous_with_previous} candidates="
+                + ",".join(
+                    f"{candidate['language']}:asr={candidate['asr_avg_logprob']:.4f}:"
+                    f"detect={candidate['detection_probability']:.4f}:"
+                    f"score={candidate['selection_score']:.4f}"
+                    for candidate in candidate_diagnostics
+                )
+            )
+            self._previous_language = self.expected_languages[selected_index]
+            self._previous_speech_end_sec = speech_end_sec
 
         return encoder_output, selected_outputs
 
