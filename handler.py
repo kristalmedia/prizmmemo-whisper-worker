@@ -17,7 +17,11 @@ from faster_whisper import BatchedInferencePipeline
 from whisperx.diarize import DiarizationPipeline
 
 
-ENGINE_VERSION = f"prizmmemo-runpod/1.2.0 whisperx/{importlib.metadata.version('whisperx')}"
+ENGINE_VERSION = (
+    f"prizmmemo-runpod/1.2.1 "
+    f"whisperx/{importlib.metadata.version('whisperx')} "
+    f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
+)
 LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z]{2,4})?$")
 
 
@@ -34,6 +38,9 @@ def _positive_int_env(name: str, default: int) -> int:
 
 MAX_AUDIO_BYTES = _positive_int_env("MAX_AUDIO_BYTES", 512 * 1024 * 1024)
 DOWNLOAD_TIMEOUT_SEC = _positive_int_env("DOWNLOAD_TIMEOUT_SEC", 600)
+MULTILINGUAL_CHUNK_LENGTH_SEC = _positive_int_env("MULTILINGUAL_CHUNK_LENGTH_SEC", 8)
+if not 4 <= MULTILINGUAL_CHUNK_LENGTH_SEC <= 15:
+    raise RuntimeError("MULTILINGUAL_CHUNK_LENGTH_SEC must be from 4 to 15")
 ALLOWED_AUDIO_HOST_SUFFIX = os.getenv(
     "ALLOWED_AUDIO_HOST_SUFFIX", ".r2.cloudflarestorage.com"
 ).strip().lower()
@@ -179,6 +186,7 @@ class WhisperXEngine:
         ).strip()
         self.compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "float16").strip()
         self.batch_size = _positive_int_env("WHISPER_BATCH_SIZE", 16)
+        self.multilingual_chunk_length_sec = MULTILINGUAL_CHUNK_LENGTH_SEC
         self.hf_cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface")
         cached_model = _resolve_cached_snapshot(self.model_id)
         model_source = str(cached_model) if cached_model is not None else self.model_id
@@ -192,7 +200,8 @@ class WhisperXEngine:
         source = "Runpod cache" if cached_model is not None else "Hugging Face"
         print(
             f"[startup] loading WhisperX model={self.model_id} source={source} "
-            f"compute={self.compute_type}"
+            f"compute={self.compute_type} multilingual_chunk="
+            f"{self.multilingual_chunk_length_sec}s"
         )
         self.asr_model = whisperx.load_model(
             model_source,
@@ -228,6 +237,7 @@ class WhisperXEngine:
                 task="transcribe",
                 multilingual=True,
                 batch_size=self.batch_size,
+                chunk_length=self.multilingual_chunk_length_sec,
                 vad_filter=True,
                 word_timestamps=False,
                 condition_on_previous_text=False,
@@ -293,6 +303,14 @@ class WhisperXEngine:
                 "meeting_id": request["meeting_id"],
                 "segments": result["segments"],
                 "detected_language": language,
+                "language_mode": (
+                    "forced_single_language"
+                    if len(languages) == 1
+                    else "multilingual_short_vad_chunks"
+                ),
+                "multilingual_chunk_length_sec": (
+                    None if len(languages) == 1 else self.multilingual_chunk_length_sec
+                ),
                 "alignment_applied": alignment_applied,
                 "speaker_embeddings": speaker_embeddings,
                 "engine_version": ENGINE_VERSION,

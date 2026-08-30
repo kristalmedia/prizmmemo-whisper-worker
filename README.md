@@ -5,8 +5,12 @@ Queue-based Runpod Serverless worker for GPU transcription, word alignment, and 
 `input.languages` contains one to three expected language codes. A single code is forced through
 WhisperX's fast, stable single-language path. With two or more codes, the worker uses
 faster-whisper's multilingual batched pipeline, which detects the language independently for each
-VAD speech chunk and changes that chunk's decoder prompt accordingly. This mode intentionally
-skips single-language wav2vec alignment and retains segment-level timestamps for diarization.
+short VAD speech chunk and changes that chunk's decoder prompt accordingly. Engine 1.2.1 caps
+those chunks at eight seconds by default so conversational English/Bahasa Melayu switches are not
+decoded under one language decision for a full 30-second window. This mode intentionally skips
+single-language wav2vec alignment and retains segment-level timestamps for diarization.
+The image pins faster-whisper 1.2.0 because that release correctly pads feature input when
+`chunk_length` is below 30 seconds.
 
 ## Job contract
 
@@ -17,6 +21,7 @@ The completed output contains:
 - meeting_id
 - segments with relative timestamps, text, words, and speaker labels when diarization is enabled
 - detected_language
+- language_mode and multilingual_chunk_length_sec
 - alignment_applied
 - speaker_embeddings for later meeting-wide speaker reconciliation
 - engine_version
@@ -32,6 +37,7 @@ The completed output contains:
 | WHISPER_MODEL_ID | Systran/faster-whisper-large-v3 | Faster-Whisper Hugging Face repository |
 | WHISPER_COMPUTE_TYPE | float16 | CTranslate2 compute type |
 | WHISPER_BATCH_SIZE | 16 | ASR batch size; lower this if GPU memory is exhausted |
+| MULTILINGUAL_CHUNK_LENGTH_SEC | 8 | Maximum VAD speech-chunk length used for per-chunk language detection in multilingual mode |
 | MAX_AUDIO_BYTES | 536870912 | Maximum downloaded input size |
 | DOWNLOAD_TIMEOUT_SEC | 600 | Per-read timeout while downloading from R2 |
 | ALLOWED_AUDIO_HOST_SUFFIX | .r2.cloudflarestorage.com | Required signed-URL hostname suffix |

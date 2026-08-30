@@ -7,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WHISPER_MODEL_ID=Systran/faster-whisper-large-v3 \
     WHISPER_COMPUTE_TYPE=float16 \
     WHISPER_BATCH_SIZE=16 \
+    MULTILINGUAL_CHUNK_LENGTH_SEC=8 \
     MAX_AUDIO_BYTES=536870912 \
     ALLOWED_AUDIO_HOST_SUFFIX=.r2.cloudflarestorage.com
 
