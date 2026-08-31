@@ -19,10 +19,15 @@ from faster_whisper import BatchedInferencePipeline
 from whisperx.diarize import DiarizationPipeline
 
 from language_selection import score_language_candidates, select_language_candidate
+from log_safety import suppress_signed_request_logging
+from speaker_segments import split_segments_by_word_speaker
+
+
+suppress_signed_request_logging()
 
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.3.1 "
+    f"prizmmemo-runpod/1.3.2 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
@@ -220,8 +225,6 @@ class ExpectedLanguageBatchedInferencePipeline(BatchedInferencePipeline):
         tokenizer: Any,
         options: Any,
     ) -> tuple[Any, list[dict[str, Any]]]:
-        if options.word_timestamps:
-            raise RuntimeError("candidate decoding requires segment-level timestamps")
         prompt = self.model.get_prompt(
             tokenizer,
             previous_tokens=(
@@ -375,12 +378,16 @@ class ExpectedLanguageBatchedInferencePipeline(BatchedInferencePipeline):
                     f"detect={candidate['detection_probability']:.4f}:"
                     f"score={candidate['selection_score']:.4f}"
                     for candidate in candidate_diagnostics
-                )
+                ),
+                flush=True,
             )
             self._previous_language = self.expected_languages[selected_index]
             self._previous_speech_end_sec = speech_end_sec
 
-        return encoder_output, selected_outputs
+        selected_encoder_output = (
+            self.model.encode(features) if options.word_timestamps else encoder_output
+        )
+        return selected_encoder_output, selected_outputs
 
 
 class WhisperXEngine:
@@ -451,7 +458,7 @@ class WhisperXEngine:
                 batch_size=max(1, self.batch_size // len(languages)),
                 chunk_length=self.multilingual_chunk_length_sec,
                 vad_filter=True,
-                word_timestamps=False,
+                word_timestamps=True,
                 condition_on_previous_text=False,
             )
             segments = [
@@ -459,6 +466,15 @@ class WhisperXEngine:
                     "start": float(segment.start),
                     "end": float(segment.end),
                     "text": segment.text,
+                    "words": [
+                        {
+                            "start": float(word.start),
+                            "end": float(word.end),
+                            "word": word.word,
+                            "score": float(word.probability),
+                        }
+                        for word in (segment.words or [])
+                    ],
                 }
                 for segment in raw_segments
             ]
@@ -518,6 +534,8 @@ class WhisperXEngine:
                 speaker_embeddings=speaker_embeddings,
                 fill_nearest=True,
             )
+            if len(languages) > 1:
+                result["segments"] = split_segments_by_word_speaker(result["segments"])
 
         return _json_safe(
             {
