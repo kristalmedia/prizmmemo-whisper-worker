@@ -3,17 +3,21 @@
 Queue-based Runpod Serverless worker for GPU transcription, word alignment, and speaker diarization.
 
 `input.languages` contains one to three expected language codes. A single code is forced through
-WhisperX's fast, stable single-language path. With two or more codes, engine 1.3.2 treats those
+WhisperX's fast, stable single-language path. With two or more codes, engine 1.3.3 treats those
 codes as the allowed candidate set. Every short VAD speech chunk is decoded once under each
 configured language token in one expanded GPU batch. The worker selects the candidate with the
-best ASR likelihood plus a small language-detector prior. Ambiguous chunks receive a modest
+best ASR likelihood plus a bounded language-detector prior. Detector influence is capped at
+±0.10 so a near-zero classifier probability cannot override substantially stronger ASR evidence.
+Ambiguous chunks receive a modest
 Primary-language preference, and near-contiguous speech receives a modest continuity preference;
 clear evidence still switches to a Secondary or Tertiary language. Per-candidate scores are logged
 without transcript text so incorrect choices can be diagnosed without exposing meeting content.
 HTTP client request logs are suppressed so signed R2 query strings never reach Runpod logs.
 Multilingual decoding also retains native Whisper word timestamps; after diarization, segments
 that cross a detected speaker boundary are split at the word boundary instead of assigning the
-entire mixed-speaker segment to its dominant speaker.
+entire mixed-speaker segment to its dominant speaker. One- or two-word speaker islands lasting no
+more than one second are merged when surrounded by the same speaker, preventing diarization
+flicker from creating fragments such as a standalone conjunction.
 This mode intentionally skips single-language wav2vec alignment and retains segment-level
 timestamps for diarization.
 The image pins faster-whisper 1.2.0 because that release correctly pads feature input when

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 
 
-LANGUAGE_DETECTION_PRIOR_WEIGHT = 0.1
+MAX_LANGUAGE_DETECTION_ADJUSTMENT = 0.1
 PRIMARY_LANGUAGE_BONUS = 0.12
 CONTIGUOUS_LANGUAGE_BONUS = 0.08
 
@@ -33,9 +32,11 @@ def score_language_candidates(
         average_log_probabilities,
         detection_probabilities,
     ):
-        detector_adjustment = LANGUAGE_DETECTION_PRIOR_WEIGHT * math.log(
-            max(detection_probability, 1e-8)
+        detector_signal = max(
+            -1.0,
+            min(1.0, (2.0 * detection_probability) - 1.0),
         )
+        detector_adjustment = MAX_LANGUAGE_DETECTION_ADJUSTMENT * detector_signal
         primary_adjustment = (
             PRIMARY_LANGUAGE_BONUS if language == primary_language else 0.0
         )

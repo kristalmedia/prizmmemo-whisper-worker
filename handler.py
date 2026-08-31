@@ -27,7 +27,7 @@ suppress_signed_request_logging()
 
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.3.2 "
+    f"prizmmemo-runpod/1.3.3 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
@@ -517,7 +517,10 @@ class WhisperXEngine:
                 gc.collect()
                 torch.cuda.empty_cache()
         except ValueError as error:
-            print(f"[job {job.get('id', 'unknown')}] alignment skipped for language={language}: {error}")
+            print(
+                f"[job {job.get('id', 'unknown')}] wav2vec alignment skipped "
+                f"for multilingual language={language}; native word timestamps retained: {error}"
+            )
 
         speaker_embeddings = None
         if request["diarize"]:

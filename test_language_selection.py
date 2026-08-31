@@ -46,6 +46,38 @@ class SelectLanguageCandidateTests(unittest.TestCase):
         )
         self.assertEqual(selected, 1)
 
+    def test_english_asr_wins_first_wrong_translation_regression(self) -> None:
+        selected = select_language_candidate(
+            ["en", "ms"],
+            [-0.1185, -0.4747],
+            [0.0012, 0.9878],
+            primary_language="en",
+            previous_language="ms",
+            continuous_with_previous=True,
+        )
+        self.assertEqual(selected, 0)
+
+    def test_english_asr_wins_second_wrong_translation_regression(self) -> None:
+        selected = select_language_candidate(
+            ["en", "ms"],
+            [-0.1311, -0.5511],
+            [0.0008, 0.9980],
+            primary_language="en",
+            previous_language="en",
+            continuous_with_previous=True,
+        )
+        self.assertEqual(selected, 0)
+
+    def test_detector_adjustment_is_bounded(self) -> None:
+        scores = score_language_candidates(
+            ["en", "ms"],
+            [-0.30, -0.30],
+            [0.0, 1.0],
+            primary_language="en",
+        )
+        self.assertEqual(scores[0]["detector_adjustment"], -0.1)
+        self.assertEqual(scores[1]["detector_adjustment"], 0.1)
+
     def test_continuity_breaks_a_close_score_only_for_adjacent_speech(self) -> None:
         continuous = select_language_candidate(
             ["en", "ms"],
