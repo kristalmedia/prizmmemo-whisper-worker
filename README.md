@@ -36,7 +36,8 @@ The completed output contains:
 - detected_language
 - language_mode, multilingual_chunk_length_sec, and per-chunk language diagnostics
 - alignment_applied
-- speaker_embeddings for later meeting-wide speaker reconciliation
+- finite, label-keyed speaker_embeddings for later meeting-wide speaker reconciliation
+- compact result payloads containing only the segment fields PrizmMemo consumes, preventing avoidable serverless result serialization and size failures
 - engine_version
 
 ## Required Runpod secret
