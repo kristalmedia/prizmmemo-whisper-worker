@@ -3,7 +3,7 @@
 Queue-based Runpod Serverless worker for GPU transcription, word alignment, and speaker diarization.
 
 `input.languages` contains one to three expected language codes. A single code is forced through
-WhisperX's fast, stable single-language path. With two or more codes, engine 1.3.4 treats those
+WhisperX's fast, stable single-language path. With two or more codes, engine 1.3.6 treats those
 codes as the allowed candidate set. Every short VAD speech chunk is decoded once under each
 configured language token in one expanded GPU batch. The worker selects the candidate with the
 best ASR likelihood plus a bounded language-detector prior. Detector influence is capped at
@@ -60,5 +60,8 @@ The completed output contains:
 For the initial endpoint use a 24 GB GPU, Queue mode, concurrency 1, max workers 1, and active workers 0. Set the Runpod Model field to Systran/faster-whisper-large-v3. The worker resolves that cached snapshot automatically and downloads the gated pyannote model at runtime with HF_TOKEN.
 
 ## Deployment gate
+
+The image build performs a lightweight import check for every local handler module so an omitted
+source file fails the build rather than crashing workers after jobs have entered the queue.
 
 Do not connect this worker to the main PrizmMemo job pipeline until one short signed-R2 audio file completes successfully and the output has transcript segments, speaker labels, and no signed URL in logs.

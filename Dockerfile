@@ -20,6 +20,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY handler.py language_selection.py log_safety.py speaker_segments.py ./
+COPY handler.py language_selection.py log_safety.py output_payload.py speaker_segments.py ./
+
+# Keep the explicit image manifest honest. These lightweight local-module
+# imports fail the image build if a handler dependency is ever omitted again,
+# instead of letting RunPod accept jobs into a worker that crashes at startup.
+RUN python -c "import language_selection, log_safety, output_payload, speaker_segments"
 
 CMD ["python", "-u", "handler.py"]
