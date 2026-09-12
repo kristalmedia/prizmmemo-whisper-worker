@@ -27,7 +27,7 @@ suppress_signed_request_logging()
 
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.3.3 "
+    f"prizmmemo-runpod/1.3.4 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
@@ -458,6 +458,12 @@ class WhisperXEngine:
                 batch_size=max(1, self.batch_size // len(languages)),
                 chunk_length=self.multilingual_chunk_length_sec,
                 vad_filter=True,
+                # Keep Whisper's timestamp tokens as segment anchors. The
+                # default batched setting suppresses them and makes timing
+                # depend entirely on native word alignment, which can begin
+                # several seconds early after silence. Bookmarks need the
+                # audio timeline, not a silence-compacted speech timeline.
+                without_timestamps=False,
                 word_timestamps=True,
                 condition_on_previous_text=False,
             )
