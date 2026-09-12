@@ -20,6 +20,7 @@ from whisperx.diarize import DiarizationPipeline
 
 from language_selection import score_language_candidates, select_language_candidate
 from log_safety import suppress_signed_request_logging
+from output_payload import compact_segments, normalize_speaker_embeddings
 from speaker_segments import split_segments_by_word_speaker
 
 
@@ -27,7 +28,7 @@ suppress_signed_request_logging()
 
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.3.4 "
+    f"prizmmemo-runpod/1.3.5 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
@@ -549,7 +550,7 @@ class WhisperXEngine:
         return _json_safe(
             {
                 "meeting_id": request["meeting_id"],
-                "segments": result["segments"],
+                "segments": compact_segments(result["segments"]),
                 "detected_language": language,
                 "language_mode": (
                     "forced_single_language"
@@ -561,7 +562,7 @@ class WhisperXEngine:
                 ),
                 "language_chunks": language_chunks,
                 "alignment_applied": alignment_applied,
-                "speaker_embeddings": speaker_embeddings,
+                "speaker_embeddings": normalize_speaker_embeddings(speaker_embeddings),
                 "engine_version": ENGINE_VERSION,
             }
         )
