@@ -28,7 +28,7 @@ suppress_signed_request_logging()
 
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.3.5 "
+    f"prizmmemo-runpod/1.3.6 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
