@@ -21,6 +21,7 @@ from whisperx.diarize import DiarizationPipeline
 from language_selection import score_language_candidates, select_language_candidate
 from log_safety import suppress_signed_request_logging
 from output_payload import compact_segments, normalize_speaker_embeddings
+from result_sidecar import put_result_sidecar, validate_result_put_url
 from speaker_segments import split_segments_by_word_speaker
 
 
@@ -28,7 +29,7 @@ suppress_signed_request_logging()
 
 
 ENGINE_VERSION = (
-    f"prizmmemo-runpod/1.3.6 "
+    f"prizmmemo-runpod/1.3.7 "
     f"whisperx/{importlib.metadata.version('whisperx')} "
     f"faster-whisper/{importlib.metadata.version('faster-whisper')}"
 )
@@ -136,6 +137,7 @@ def _validate_input(job: dict[str, Any]) -> dict[str, Any]:
     return {
         "meeting_id": meeting_id.strip(),
         "audio_url": _validate_audio_url(payload.get("audio_url")),
+        "result_put_url": validate_result_put_url(payload.get("result_put_url"), ALLOWED_AUDIO_HOST_SUFFIX),
         "languages": _expected_languages(payload.get("languages")),
         "diarize": diarize,
         "min_speakers": min_speakers,
@@ -578,6 +580,9 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         _progress(job, "downloading")
         audio_path = _download_audio(request["audio_url"])
         result = ENGINE.transcribe(job, request, audio_path)
+        if request["result_put_url"]:
+            if not put_result_sidecar(request["result_put_url"], str(job.get("id", "")), result):
+                print("[result-handoff] private result backup unavailable; RunPod status remains primary")
         _progress(job, "complete")
         return result
     finally:

@@ -27,6 +27,14 @@ The image pins faster-whisper 1.2.0 because that release correctly pads feature 
 
 ## Job contract
 
+When the application supplies `input.result_put_url`, the worker writes the
+completed JSON result to that short-lived private R2 presigned PUT URL before
+returning through RunPod's normal result channel. The payload includes the
+RunPod job ID; the application accepts it only when both job and meeting IDs
+match. The URL and result are never logged. This backup channel requires a
+matching application release, private R2 lifecycle cleanup, and a controlled
+deployment test before enabling `PRIZMMEMO_RUNPOD_RESULT_SIDECAR=on`.
+
 Submit the object in test_input.json to the Runpod /run endpoint. audio_url must be a short-lived HTTPS presigned URL whose host ends in .r2.cloudflarestorage.com. The worker never logs the signed URL and deletes the downloaded object from local disk after every job.
 
 The completed output contains:
